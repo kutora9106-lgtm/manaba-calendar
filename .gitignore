@@ -1,0 +1,16 @@
+# Python関連
+__pycache__/
+*.py[cod]
+
+# 環境設定ファイル
+*.ini
+*.pickle
+
+# 機密情報
+credentials.json
+token.pickle
+
+# その他
+chromedriver.exe
+*.log
+*.tmp
