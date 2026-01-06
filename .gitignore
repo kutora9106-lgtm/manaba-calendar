@@ -1,16 +1,7 @@
-# Python関連
 __pycache__/
-*.py[cod]
-
-# 環境設定ファイル
-*.ini
-*.pickle
-
-# 機密情報
-credentials.json
+*.pyc
 token.pickle
-
-# その他
-chromedriver.exe
-*.log
-*.tmp
+credentials.json
+settings.ini
+.streamlit/secrets.toml
+venv/
