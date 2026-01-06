@@ -1,4 +1,1 @@
-Flask
-selenium
-streamlit
-webdriver-manager
+chromium-chromedriver
