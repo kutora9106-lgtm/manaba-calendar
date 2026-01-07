@@ -19,6 +19,7 @@ from webdriver_manager.core.os_manager import ChromeType
 # Google API
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
 # --- ページ設定 ---
@@ -26,11 +27,12 @@ st.set_page_config(page_title="manaba 自動連携ツール", layout="centered")
 
 # --- クラス定義: ロジックの中核 ---
 class ManabaEngine:
-    def __init__(self, user, pw, log_container, progress_bar):
+    def __init__(self, user, pw, log_container, progress_bar, credentials):
         self.user = user
         self.pw = pw
         self.log_container = log_container
         self.progress_bar = progress_bar
+        self.credentials = credentials
         self.calendar_id = 'primary'
         self.sig = "[manaba-auto]"
         self.logs = []
@@ -142,16 +144,7 @@ class ManabaEngine:
         return final_tasks, list(set(submitted_list))
 
     def _get_calendar_service(self):
-        if "google_calendar" not in st.secrets:
-            raise Exception("SecretsにGoogleカレンダーの設定が見つかりません。")
-        info = st.secrets["google_calendar"]
-        creds = Credentials.from_authorized_user_info(info)
-        if not creds.valid:
-            if creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                raise Exception("Google認証トークンの有効期限が切れました。")
-        return build('calendar', 'v3', credentials=creds)
+        return build('calendar', 'v3', credentials=self.credentials)
 
     def sync_calendar(self, tasks, submitted_titles):
         service = self._get_calendar_service()
@@ -196,18 +189,80 @@ class ManabaEngine:
 st.title("manaba 自動連携ツール (Web版)")
 st.markdown("manabaの未提出課題を取得し、Googleカレンダーに同期します。")
 
-with st.form("login_form"):
-    user_id = st.text_input("manaba ユーザーID")
-    password = st.text_input("パスワード", type="password")
-    submitted = st.form_submit_button("同期を開始")
+# --- OAuth認証フロー ---
+SCOPES = ['https://www.googleapis.com/auth/calendar']
 
-if submitted:
-    if not user_id or not password:
-        st.error("IDとパスワードを入力してください")
-    else:
-        st.subheader("実行ログ")
-        progress_bar = st.progress(0)
-        log_area = st.empty()
-        
-        engine = ManabaEngine(user_id, password, log_area, progress_bar)
-        engine.run()
+if 'credentials' not in st.session_state:
+    st.session_state.credentials = None
+
+def get_flow():
+    # secrets.toml が正しく読み込めているかチェック
+    if "google_oauth" not in st.secrets:
+        st.error("エラー: SecretsにGoogleカレンダーの設定が見つかりません。")
+        st.info("""
+        プロジェクトフォルダ内の `.streamlit/secrets.toml` を確認してください。
+        ```toml
+        [google_oauth]
+        client_id = "..."
+        client_secret = "..."
+        redirect_uri = "http://localhost:8501"
+        ```
+        """)
+        st.stop()
+
+    conf = st.secrets["google_oauth"]
+    return Flow.from_client_config(
+        {
+            "web": {
+                "client_id": conf["client_id"],
+                "client_secret": conf["client_secret"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        },
+        scopes=SCOPES,
+        redirect_uri=conf["redirect_uri"]
+    )
+
+# 1. 認証コードがURLにある場合（Googleからのリダイレクト戻り）
+if "code" in st.query_params and not st.session_state.credentials:
+    try:
+        code = st.query_params["code"]
+        flow = get_flow()
+        flow.fetch_token(code=code)
+        st.session_state.credentials = flow.credentials
+        st.query_params.clear() # URLをクリーンにする
+        st.rerun()
+    except Exception as e:
+        st.error(f"認証エラー: {e}")
+
+# 2. 未ログイン時：ログインボタンを表示
+if not st.session_state.credentials:
+    st.warning("まずはGoogleカレンダーへのアクセスを許可してください。")
+    flow = get_flow()
+    auth_url, _ = flow.authorization_url(prompt='consent')
+    st.link_button("Googleでログイン", auth_url)
+
+# 3. ログイン済み：manabaフォームを表示
+else:
+    st.success("Googleログイン済み")
+    if st.button("ログアウト"):
+        st.session_state.credentials = None
+        st.rerun()
+
+    with st.form("login_form"):
+        user_id = st.text_input("manaba ユーザーID")
+        password = st.text_input("パスワード", type="password")
+        submitted = st.form_submit_button("同期を開始")
+
+    if submitted:
+        if not user_id or not password:
+            st.error("IDとパスワードを入力してください")
+        else:
+            st.subheader("実行ログ")
+            progress_bar = st.progress(0)
+            log_area = st.empty()
+            
+            # 認証情報を渡してエンジンを起動
+            engine = ManabaEngine(user_id, password, log_area, progress_bar, st.session_state.credentials)
+            engine.run()
